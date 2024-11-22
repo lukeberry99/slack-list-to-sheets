@@ -1,69 +1,76 @@
 package main
 
 import (
+	"context"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
+	"syscall"
+	"time"
 
-	"github.com/joho/godotenv"
-	"github.com/lukeberry99/slack-list-to-sheets/download"
-	"github.com/lukeberry99/slack-list-to-sheets/extractor"
-	"github.com/lukeberry99/slack-list-to-sheets/slack"
+	"github.com/lukeberry99/slack-list-to-sheets/config"
+	"github.com/lukeberry99/slack-list-to-sheets/handlers"
+	"github.com/lukeberry99/slack-list-to-sheets/middleware"
 )
 
 func main() {
-	err := godotenv.Load()
+	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("Error loading .env file: %v", err)
+		log.Fatalf("Failed to load config: %v", err)
 	}
 
-	// Start the HTTP server
-	http.HandleFunc("/get-file", handleGetCSV)
-	log.Println("Server started on port 8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
-}
+	// Create handlers
+	csvHandler := handlers.NewCSVHandler(cfg.SlackToken)
 
-func handleGetCSV(w http.ResponseWriter, r *http.Request) {
+	// Setup router
+	mux := http.NewServeMux()
+	mux.HandleFunc("/get-file", csvHandler.HandleGetCSV)
 
-	token := os.Getenv("SLACK_TOKEN")
-	if token == "" {
-		http.Error(w, "SLACK_TOKEN is not set", http.StatusInternalServerError)
-		return
+	// Add middleware
+	handler := middleware.Logging(mux)
+
+	// Create server
+	server := &http.Server{
+		Addr:    ":" + cfg.ServerPort,
+		Handler: handler,
 	}
 
-	slackClient := slack.NewClient(token)
-	fileId := r.URL.Query().Get("fileId")
+	// Server run context
+	serverCtx, serverStopCtx := context.WithCancel(context.Background())
 
-	log.Printf("Getting file with ID: %s", fileId)
+	// Listen for syscall signals for process to interrupt/quit
+	sig := make(chan os.Signal, 1)
+	signal.Notify(sig, syscall.SIGHUP, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
 
-	if fileId == "" {
-		http.Error(w, "fileId parameter is required", http.StatusBadRequest)
-		return
+	go func() {
+		<-sig
+
+		// Shutdown signal with grace period of 30 seconds
+		shutdownCtx, _ := context.WithTimeout(serverCtx, 30*time.Second)
+
+		go func() {
+			<-shutdownCtx.Done()
+			if shutdownCtx.Err() == context.DeadlineExceeded {
+				log.Fatal("graceful shutdown timed out.. forcing exit.")
+			}
+		}()
+
+		// Trigger graceful shutdown
+		err := server.Shutdown(shutdownCtx)
+		if err != nil {
+			log.Printf("Error during shutdown: %v", err)
+		}
+		serverStopCtx()
+	}()
+
+	// Run the server
+	log.Printf("Server started on port %s", cfg.ServerPort)
+	err = server.ListenAndServe()
+	if err != nil && err != http.ErrServerClosed {
+		log.Fatalf("Error starting server: %v", err)
 	}
 
-	fileInfo, err := slackClient.GetFileInfo(fileId)
-	if err != nil {
-		log.Fatalf("Error getting file info: %v", err)
-		http.Error(w, "Error getting file info", http.StatusInternalServerError)
-		return
-	}
-
-	output, err := download.DownloadFile(fileInfo.URLPrivate, token)
-	if err != nil {
-		log.Fatalf("Error downloading file: %v", err)
-		http.Error(w, "Error downloading file", http.StatusInternalServerError)
-		return
-	}
-
-	csvData, err := extractor.ConvertJSONToCSV(output)
-	if err != nil {
-		log.Fatalf("Error converting JSON to CSV: %v", err)
-		http.Error(w, "Error converting JSON to CSV", http.StatusInternalServerError)
-		return
-	}
-
-	w.Header().Set("Content-Type", "text/csv")
-	w.Write([]byte(csvData))
-
-	log.Println("File downloaded successfully")
+	// Wait for server context to be stopped
+	<-serverCtx.Done()
 }
