@@ -13,9 +13,8 @@ type Config struct {
 }
 
 func Load() (*Config, error) {
-	if err := godotenv.Load(); err != nil {
-		return nil, fmt.Errorf("error loading .env file: %w", err)
-	}
+	// Load .env file if it exists, ignore error if it doesn't
+	_ = godotenv.Load()
 
 	config := &Config{
 		SlackToken: os.Getenv("SLACK_TOKEN"),
