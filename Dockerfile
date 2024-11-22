@@ -11,20 +11,17 @@ RUN go mod download
 COPY . .
 
 ARG TARGETARCH
-
-FROM --platform=$TARGETPLATFORM alpine:3.18
-
 RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -o main .
 
-FROM alpine:3.18
+FROM --platform=$TARGETPLATFORM alpine:3.18
 
 RUN addgroup -S appgroup && adduser -S appuser -G appgroup
 
 WORKDIR /app
 
-COPY --from=builder /app/main .
-
-RUN chown -R appuser:appgroup /app
+# Create directory and copy binary with correct permissions
+RUN mkdir -p /app
+COPY --from=builder --chown=appuser:appgroup /app/main .
 
 # Switch to non-root user
 USER appuser
