@@ -1,4 +1,4 @@
-FROM golang:1.22-alpine AS builder
+FROM --platform=$BUILDPLATFORM golang:1.22-alpine AS builder
 
 RUN apk add --no-cache git
 
@@ -10,7 +10,11 @@ RUN go mod download
 
 COPY . .
 
-RUN CGO_ENABLED=0 GOOS=linux go build -o main .
+ARG TARGETARCH
+
+FROM --platform=$TARGETPLATFORM alpine:3.18
+
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH go build -o main .
 
 FROM alpine:3.18
 
