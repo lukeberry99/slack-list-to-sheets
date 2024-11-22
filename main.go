@@ -26,6 +26,10 @@ func main() {
 	// Setup router
 	mux := http.NewServeMux()
 	mux.HandleFunc("/get-file", csvHandler.HandleGetCSV)
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("OK"))
+	})
 
 	// Add middleware
 	handler := middleware.Logging(mux)
